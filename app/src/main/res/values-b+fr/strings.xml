@@ -445,4 +445,30 @@
         <item>Ajuster en bas</item>
         <item>Ajuster à droite</item>
     </string-array>
+    <!-- Jeu en ligne Project PM -->
+    <string name="pm_online">Jeu en ligne (Project PM)</string>
+    <string name="pm_online_host">Héberger une partie en ligne</string>
+    <string name="pm_online_join">Rejoindre une partie en ligne</string>
+    <string name="pm_online_host_info">Tu obtiens un code de salle de 5 caractères à partager avec les autres joueurs. Aucune redirection de port nécessaire.</string>
+    <string name="pm_online_join_info">Entre le code de salle de 5 caractères affiché chez l\'hôte. Utilise le même serveur relais que lui.</string>
+    <string name="pm_online_host_action">Héberger</string>
+    <string name="pm_online_join_action">Rejoindre</string>
+    <string name="pm_online_name">Pseudo</string>
+    <string name="pm_online_code">Code de salle</string>
+    <string name="pm_online_relay_server">Serveur relais</string>
+    <string name="pm_online_code_invalid">Le code de salle fait 5 caractères</string>
+    <string name="pm_online_relay_not_found">Serveur relais %1$s introuvable</string>
+    <string name="pm_online_leave">Quitter la partie</string>
+    <string name="pm_online_left">Partie en ligne quittée</string>
+    <string name="pm_online_copy_code">Copier le code</string>
+    <string name="pm_online_code_copied">Code de salle copié</string>
+    <string name="pm_online_role_host">Tu héberges cette partie.</string>
+    <string name="pm_online_role_guest">Tu as rejoint cette partie.</string>
+    <string name="pm_online_room_code">Code de salle : %1$s</string>
+    <string name="pm_online_state">État : %1$s</string>
+    <string name="pm_online_relay">Relais : %1$s</string>
+    <string name="pm_online_players">Joueurs :</string>
+    <string name="pm_online_me">" (toi)"</string>
+    <string name="pm_online_overlay_room">En ligne · salle %1$s · %2$d joueur(s)</string>
+    <string name="pm_online_overlay_connecting">En ligne · %1$s</string>
 </resources>

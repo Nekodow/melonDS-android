@@ -15,6 +15,7 @@
 #include "MelonInstance.h"
 #include "NDS.h"
 #include "NDSCart.h"
+#include "PMBridge.h"
 #include "net/Net_Slirp.h"
 #include "Platform.h"
 #include "SDCardArgsBuilder.h"
@@ -270,6 +271,7 @@ void MelonInstance::start()
 void MelonInstance::reset()
 {
     nds->Reset();
+    PMBridge::ResetRomState();
     setBatteryLevels();
     setDateTime();
 
@@ -356,6 +358,7 @@ u32 MelonInstance::runFrame()
         nds->GPU.GetRenderer3D().SetOutputTexture(backBuffer, renderFrame->frameTexture);
     }
 
+    PMBridge::Pump(nds);
     u32 nLines = nds->RunFrame();
     retroAchievementsManager->FrameUpdate();
 

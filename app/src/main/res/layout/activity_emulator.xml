@@ -28,6 +28,23 @@
             tools:text="FPS: 60"/>
 
     <TextView
+            android:id="@+id/textOnline"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            android:background="#99000000"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="4dp"
+            android:textColor="@android:color/white"
+            android:textSize="12sp"
+            android:visibility="gone"
+            tools:visibility="visible"
+            tools:text="Online · room ABCDE · 2 players"/>
+
+    <TextView
             android:id="@+id/textLoading"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

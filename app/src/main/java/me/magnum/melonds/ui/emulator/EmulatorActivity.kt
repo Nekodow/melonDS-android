@@ -271,6 +271,8 @@ class EmulatorActivity : AppCompatActivity() {
     private val showAchievementList = mutableStateOf(false)
     private val showPendingSubmissionsDialog = mutableStateOf(false)
 
+    private lateinit var pmOnlineController: PMOnlineController
+
     private val activeOverlays = EmulatorOverlayTracker(
         onOverlaysCleared = {
             disableScreenTimeOut()
@@ -289,6 +291,17 @@ class EmulatorActivity : AppCompatActivity() {
         binding = ActivityEmulatorBinding.inflate(layoutInflater)
         supportRequestWindowFeature(Window.FEATURE_NO_TITLE)
         setContentView(binding.root)
+
+        pmOnlineController = PMOnlineController(
+            activity = this,
+            statusView = binding.textOnline,
+            onDialogShown = { activeOverlays.addActiveOverlay(EmulatorOverlay.ONLINE_PLAY_DIALOG) },
+            onDialogClosed = {
+                activeOverlays.removeActiveOverlay(EmulatorOverlay.ONLINE_PLAY_DIALOG)
+                viewModel.resumeEmulator()
+            },
+        )
+        pmOnlineController.startStatusUpdates()
         setupFullscreen()
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, windowInsets ->
             val insets = windowInsets.getInsets(WindowInsetsCompat.Type.displayCutout())
@@ -521,6 +534,7 @@ class EmulatorActivity : AppCompatActivity() {
                             activeOverlays.addActiveOverlay(EmulatorOverlay.ACHIEVEMENTS_DIALOG)
                             showAchievementList.value = true
                         }
+                        EmulatorUiEvent.ShowOnlinePlayMenu -> pmOnlineController.showMenu()
                         EmulatorUiEvent.ShowPendingSubmissionsDialog -> {
                             activeOverlays.addActiveOverlay(EmulatorOverlay.PENDING_SUBMISSION_CONFIRM_EXIT)
                             showPendingSubmissionsDialog.value = true

@@ -651,4 +651,30 @@
     <string name="multiplayer_error_discovery_failed">Discovery failed</string>
     <string name="multiplayer_error_lan_init_failed">Failed to initialize LAN session</string>
     <string name="multiplayer_error_permission_denied">Required permissions not granted</string>
+    <!-- Project PM online play -->
+    <string name="pm_online">Online play (Project PM)</string>
+    <string name="pm_online_host">Host online game</string>
+    <string name="pm_online_join">Join online game</string>
+    <string name="pm_online_host_info">You get a 5 character room code to share with the other players. No port forwarding needed.</string>
+    <string name="pm_online_join_info">Enter the 5 character room code shown on the host\'s screen. Use the same relay as the host.</string>
+    <string name="pm_online_host_action">Host</string>
+    <string name="pm_online_join_action">Join</string>
+    <string name="pm_online_name">Player name</string>
+    <string name="pm_online_code">Room code</string>
+    <string name="pm_online_relay_server">Relay server</string>
+    <string name="pm_online_code_invalid">Room codes are 5 characters long</string>
+    <string name="pm_online_relay_not_found">Could not find the relay server %1$s</string>
+    <string name="pm_online_leave">Leave game</string>
+    <string name="pm_online_left">Left the online game</string>
+    <string name="pm_online_copy_code">Copy code</string>
+    <string name="pm_online_code_copied">Room code copied</string>
+    <string name="pm_online_role_host">You are hosting this game.</string>
+    <string name="pm_online_role_guest">You joined this game.</string>
+    <string name="pm_online_room_code">Room code: %1$s</string>
+    <string name="pm_online_state">State: %1$s</string>
+    <string name="pm_online_relay">Relay: %1$s</string>
+    <string name="pm_online_players">Players:</string>
+    <string name="pm_online_me">" (you)"</string>
+    <string name="pm_online_overlay_room">Online · room %1$s · %2$d player(s)</string>
+    <string name="pm_online_overlay_connecting">Online · %1$s</string>
 </resources>

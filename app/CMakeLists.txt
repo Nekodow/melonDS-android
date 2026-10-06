@@ -49,6 +49,8 @@ add_library(
         ${ANDROID-CPP}/OpenGLContext.cpp
         ${ANDROID-CPP}/PlatformAndroid.cpp
         ${ANDROID-CPP}/PlatformAndroid_AAC.cpp
+        ${ANDROID-CPP}/PMBridge.cpp
+        ${ANDROID-CPP}/PMBridgeJNI.cpp
         ${ANDROID-CPP}/RetroAchievementsMapper.cpp
         ${ANDROID-CPP}/RewindManager.cpp
         ${ANDROID-CPP}/RomIconBuilder.cpp

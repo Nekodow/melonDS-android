@@ -453,6 +453,7 @@ class EmulatorViewModel @Inject constructor(
                         }
                     }
                     RomPauseMenuOption.VIEW_ACHIEVEMENTS -> _uiEvent.tryEmit(EmulatorUiEvent.ShowAchievementList)
+                    RomPauseMenuOption.ONLINE_PLAY -> _uiEvent.tryEmit(EmulatorUiEvent.ShowOnlinePlayMenu)
                     RomPauseMenuOption.RESET -> resetEmulator()
                     RomPauseMenuOption.EXIT -> exitEmulator(force = false)
                 }

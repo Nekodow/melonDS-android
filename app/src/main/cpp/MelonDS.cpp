@@ -20,6 +20,7 @@
 #include "RewindManager.h"
 #include "ROMManager.h"
 #include "MPInterface.h"
+#include "PMBridge.h"
 #include "AndroidCameraHandler.h"
 #include "renderer/ScreenshotRenderer.h"
 #include "renderer/FrameQueue.h"
@@ -71,6 +72,7 @@ namespace MelonDSAndroid
             instance = nullptr;
             return;
         }
+        PMBridge::ResetRomState();
         instance = std::make_shared<MelonInstance>(
             instanceId,
             currentConfiguration,
@@ -362,6 +364,7 @@ namespace MelonDSAndroid
 
     void stop()
     {
+        PMBridge::Shutdown();
         instance->stop();
         cleanupOpenGlContext();
     }
