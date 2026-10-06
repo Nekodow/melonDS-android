@@ -23,7 +23,8 @@ std::string sanitize(const std::string& in)
     {
         unsigned char c = (unsigned char)in[i];
         int len = (c < 0x80) ? 1 : ((c & 0xE0) == 0xC0) ? 2 : ((c & 0xF0) == 0xE0) ? 3 : 0;
-        bool ok = len > 0 && i + len <= in.size() && !(len == 1 && c < 0x20) && !(len == 2 && c < 0xC2);
+        bool ok = len > 0 && i + len <= in.size() && !(len == 1 && c < 0x20 && c != '
+') && !(len == 2 && c < 0xC2);
         for (int k = 1; ok && k < len; k++)
             ok = ((unsigned char)in[i + k] & 0xC0) == 0x80;
         if (ok) { out.append(in, i, len); i += len; }
