@@ -944,10 +944,18 @@ void applyGameFrame(NDS* nds, u8* rx, u32 n, int myRole)
     // Legacy-channel pair routing (3+ players): the single pairwise import
     // block / party buffer only takes the chosen partner's data (ROM publishes
     // intent at OW export +0x18). Per-role arrays always update.
+    // Strict routing counts peers that have been game-active AND are still in
+    // the lobby (names arrive twice a second, even mid-battle), as the DeSmuME
+    // bridge does. An ever-latch would count a player who left, or the same
+    // player under an older role after a reconnect, and lock 2P out of the
+    // legacy channel for the rest of the session.
     u8 pairRole = rd8(nds, gBr.owExp + 0x18);
+    u32 now = nowMs();
     int gamePeers = 0;
     for (int gr = 1; gr <= 8; gr++)
-        if (gr != myRole && gBr.gameEver[gr]) gamePeers++;
+        if (gr != myRole && gBr.gameEver[gr]
+            && gNet.lobbySeen[gr] != 0 && now - gNet.lobbySeen[gr] <= 5000)
+            gamePeers++;
     bool strict = (gamePeers >= 2);
     bool legacyOpen = (pairRole == 0 && !strict) || r == (int)pairRole;
     gBr.lastStrict = strict;
@@ -1153,6 +1161,8 @@ void Pump(NDS* nds)
         gBr.ctl       = rd32(nds, gBr.disc + 31*4);
         BR_LOG("ROM discovery block at %08X, bridge ctl %08X", gBr.disc, gBr.ctl);
     }
+    if (!gBr.ctl)
+        gBr.ctl = rd32(nds, gBr.disc + 31*4);   // [31] can be published after the signature
     if (!gBr.ctl || rd32(nds, gBr.ctl) != 0x42524731)     // "BRG1"
     {
         if ((gBr.frame % 30) == 0)
@@ -1180,6 +1190,9 @@ void Pump(NDS* nds)
     {
         wr8(nds, gBr.ctl + 7, 0);
         wr8(nds, gBr.ctl + 9, 0);
+        // resend party/pkt as soon as we activate (DeSmuME bridge behaviour)
+        gBr.lastParty.clear();
+        gBr.lastPkt.clear();
     }
 
     int myRole = gNet.myRole();

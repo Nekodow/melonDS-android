@@ -39,11 +39,15 @@ class PMOnlineController(
 ) {
     private val prefs = activity.getSharedPreferences("pm_online", Context.MODE_PRIVATE)
 
+    private var serviceRunning = false
+
     fun startStatusUpdates() {
         activity.lifecycleScope.launch {
             activity.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (isActive) {
-                    updateStatusView(PMOnline.getStatus())
+                    val status = PMOnline.getStatus()
+                    updateStatusView(status)
+                    updateService(status)
                     delay(1000)
                 }
             }
@@ -167,6 +171,24 @@ class PMOnlineController(
             lines += status.debug
         }
         return lines.joinToString("\n")
+    }
+
+    /** Stops the background service. Call when the emulator closes: the native session ends with it. */
+    fun onEmulatorClosed() {
+        if (serviceRunning) {
+            PMOnlineService.stop(activity)
+            serviceRunning = false
+        }
+    }
+
+    private fun updateService(status: PMOnline.Status) {
+        if (status.isActive && !serviceRunning) {
+            PMOnlineService.start(activity)
+            serviceRunning = true
+        } else if (!status.isActive && serviceRunning) {
+            PMOnlineService.stop(activity)
+            serviceRunning = false
+        }
     }
 
     private fun updateStatusView(status: PMOnline.Status) {

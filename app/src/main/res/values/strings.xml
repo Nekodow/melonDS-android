@@ -677,5 +677,6 @@
     <string name="pm_online_me">" (you)"</string>
     <string name="pm_online_overlay_room">Online · room %1$s · %2$d player(s)</string>
     <string name="pm_online_diagnostics">Diagnostics:</string>
+    <string name="pm_online_notification">Online game in progress. The connection stays open in the background.</string>
     <string name="pm_online_overlay_connecting">Online · %1$s</string>
 </resources>

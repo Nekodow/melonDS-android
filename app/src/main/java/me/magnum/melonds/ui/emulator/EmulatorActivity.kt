@@ -1058,5 +1058,8 @@ class EmulatorActivity : AppCompatActivity() {
         emulatorMotionManager.stop()
         frameRenderCoordinator.stop()
         presentation?.dismiss()
+        if (isFinishing) {
+            pmOnlineController.onEmulatorClosed()
+        }
     }
 }
