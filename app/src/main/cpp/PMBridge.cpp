@@ -38,6 +38,8 @@
 
 using namespace melonDS;
 
+namespace MelonDSAndroid { extern std::string internalFilesDir; }
+
 #define BR_LOG(...) __android_log_print(ANDROID_LOG_INFO, "PMBridge", __VA_ARGS__)
 
 namespace PMBridge
@@ -1008,6 +1010,56 @@ void publishDebug(NDS* nds, int myRole)
     gUiStatus.debug = d;
 }
 
+void hexDump(NDS* nds, u32 addr, u32 len, char* out, size_t cap)
+{
+    size_t o = 0;
+    out[0] = 0;
+    for (u32 i = 0; addr && i < len && o + 3 < cap; i++)
+        o += snprintf(out + o, cap - o, "%02X", rd8(nds, addr + i));
+}
+
+// Test hooks, driven by files in the app's internal storage (adb run-as):
+//   pm_wireless_on  activate Wireless Play through the ROM's debug inbox (cmd 19)
+//   pm_trace        log the bridge and ROM link state twice a second
+void testHooks(NDS* nds, int myRole)
+{
+    if ((gBr.frame % 30) != 0) return;
+    std::string base = MelonDSAndroid::internalFilesDir + "/";
+
+    std::string on = base + "pm_wireless_on";
+    if (access(on.c_str(), F_OK) == 0)
+    {
+        unlink(on.c_str());
+        u32 inbox = rd32(nds, gBr.disc + 17*4);
+        if (inbox)
+        {
+            wr32(nds, inbox + 12, 19);
+            wr32(nds, inbox + 16, 1);
+            wr32(nds, inbox + 4, rd32(nds, inbox + 8) + 1);
+            BR_LOG("test: wireless activation requested");
+        }
+    }
+
+    if (access((base + "pm_trace").c_str(), F_OK) == 0)
+    {
+        u32 pDiag = rd32(nds, gBr.disc + 30*4);
+        int partner = (myRole == 1) ? 2 : 1;
+        char ex[80], im[80], pk[80];
+        hexDump(nds, gBr.exportBlk, 32, ex, sizeof(ex));
+        hexDump(nds, gBr.importBlk, 32, im, sizeof(im));
+        hexDump(nds, gBr.pktExp, 32, pk, sizeof(pk));
+        BR_LOG("trace f=%u role=%d wanted=%u st=%u mask=%02X pair=%u wm=%u dpeer=%02X own=%d,%d fc=%u partner=%d,%d fc=%u",
+            gBr.frame, myRole, rd8(nds, gBr.ctl + 4), rd8(nds, gBr.ctl + 7), rd8(nds, gBr.ctl + 9),
+            rd8(nds, gBr.owExp + 0x18), pDiag ? rd8(nds, pDiag + 4) : 0xFF, pDiag ? rd8(nds, pDiag + 7) : 0,
+            (s16)rd16(nds, gBr.owExp + 4), (s16)rd16(nds, gBr.owExp + 6), rd32(nds, gBr.owExp + 0x0C),
+            (s16)rd16(nds, gBr.owImp + (partner-1)*48 + 4), (s16)rd16(nds, gBr.owImp + (partner-1)*48 + 6),
+            rd32(nds, gBr.owImp + (partner-1)*48 + 0x0C));
+        BR_LOG("trace exp=%s", ex);
+        BR_LOG("trace imp=%s", im);
+        BR_LOG("trace pkt=%s", pk);
+    }
+}
+
 void postRequest(int want, const sockaddr_in* addr, const char* disp, const char* code, const char* name)
 {
     std::lock_guard<std::mutex> lk(gUiMx);
@@ -1298,6 +1350,8 @@ void Pump(NDS* nds)
 
     if ((gBr.frame % 30) == 0)
         publishDebug(nds, myRole);
+
+    testHooks(nds, myRole);
 }
 
 }
