@@ -14,6 +14,7 @@
 #include "PMBridge.h"
 
 #include <cerrno>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -24,6 +25,9 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <map>
+#include <ctime>
+#include <sys/time.h>
 
 #include <fcntl.h>
 #include <netdb.h>
@@ -40,7 +44,8 @@ using namespace melonDS;
 
 namespace MelonDSAndroid { extern std::string internalFilesDir; }
 
-#define BR_LOG(...) __android_log_print(ANDROID_LOG_INFO, "PMBridge", __VA_ARGS__)
+namespace PMBridge { void recordNote(const char* fmt, ...); }
+#define BR_LOG(...) do { __android_log_print(ANDROID_LOG_INFO, "PMBridge", __VA_ARGS__); PMBridge::recordNote(__VA_ARGS__); } while (0)
 
 namespace PMBridge
 {
@@ -238,6 +243,93 @@ const char* relayErrText(const char* tok)
     if (!strcmp(tok, "TIMEOUT")) return "the host did not answer, retrying";
     if (!strcmp(tok, "CLOSED"))  return "the room closed, retrying";
     return "relay error, retrying";
+}
+
+// Test recorder, enabled while the file "pm_record" exists in the app's
+// internal storage: every frame sent and received on the wire and every
+// change of the ROM's mailboxes, in full, to "pm_record.log". Identical
+// consecutive entries for the same key are collapsed into a repeat count.
+struct Recorder
+{
+    FILE* f = nullptr;
+    bool enabled = false;
+    u32 lastCheck = 0, lastFlush = 0;
+    struct Last { std::vector<u8> data; u32 repeats = 0; };
+    std::map<std::string, Last> last;
+
+    bool on()
+    {
+        u32 now = nowMs();
+        if (now - lastCheck >= 1000 || lastCheck == 0)
+        {
+            lastCheck = now;
+            std::string base = MelonDSAndroid::internalFilesDir + "/";
+            bool want = access((base + "pm_record").c_str(), F_OK) == 0;
+            if (want && !f)
+            {
+                f = fopen((base + "pm_record.log").c_str(), "a");
+                if (f) { stamp(); fprintf(f, "=== recording started\n"); }
+            }
+            else if (!want && f)
+            {
+                stamp(); fprintf(f, "=== recording stopped\n");
+                fclose(f); f = nullptr; last.clear();
+            }
+            enabled = f != nullptr;
+        }
+        if (f && now - lastFlush >= 500) { lastFlush = now; fflush(f); }
+        return enabled;
+    }
+
+    void stamp()
+    {
+        timeval tv; gettimeofday(&tv, nullptr);
+        tm t; gmtime_r(&tv.tv_sec, &t);
+        fprintf(f, "%02d:%02d:%02d.%03d UTC ", t.tm_hour, t.tm_min, t.tm_sec, (int)(tv.tv_usec / 1000));
+    }
+
+    void entry(const std::string& key, const u8* p, u32 n)
+    {
+        if (!on()) return;
+        Last& l = last[key];
+        if (l.data.size() == n && (n == 0 || memcmp(l.data.data(), p, n) == 0)) { l.repeats++; return; }
+        if (l.repeats) { stamp(); fprintf(f, "%s  (previous value repeated %u more times)\n", key.c_str(), l.repeats); }
+        l.data.assign(p, p + n);
+        l.repeats = 0;
+        stamp();
+        fprintf(f, "%s len=%u ", key.c_str(), n);
+        for (u32 i = 0; i < n; i++) fprintf(f, "%02X", p[i]);
+        fputc('\n', f);
+    }
+
+    void note(const char* text)
+    {
+        if (!on()) return;
+        stamp(); fprintf(f, "%s\n", text);
+    }
+};
+
+Recorder gRec;
+
+}
+
+void recordNote(const char* fmt, ...)
+{
+    if (!gRec.on()) return;
+    char buf[256];
+    va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
+    gRec.note(buf);
+}
+
+namespace
+{
+
+void recordFrame(const char* dir, int peer, const u8* p, u32 n)
+{
+    if (!gRec.on() || n == 0) return;
+    char key[48];
+    snprintf(key, sizeof(key), "%s peer%d tag%02X role%d", dir, peer, p[0], n > 1 ? p[1] : -1);
+    gRec.entry(key, p, n);
 }
 
 struct Peer
@@ -730,6 +822,7 @@ struct Net
         Peer& pr = peers[i];
         if (!pr.up || n == 0 || n > MAXFRAME) return;
         if (pr.tx.size() > 512*1024) return;
+        recordFrame("TX", i, p, n);
         u8 hdr[2] = { (u8)(n & 0xFF), (u8)(n >> 8) };
         pr.tx.insert(pr.tx.end(), hdr, hdr + 2);
         pr.tx.insert(pr.tx.end(), p, p + n);
@@ -772,6 +865,7 @@ struct Net
         if (n == 0 || n > MAXFRAME) { dropPeer(i); return 0; }
         if (p.rx.size() < 2 + n) return 0;
         u32 c = (n <= outMax) ? n : outMax;
+        recordFrame("RX", i, p.rx.data() + 2, n);
         memcpy(out, p.rx.data() + 2, c);
         p.rx.erase(p.rx.begin(), p.rx.begin() + 2 + n);
         return c;
@@ -1010,6 +1104,39 @@ void publishDebug(NDS* nds, int myRole)
     gUiStatus.debug = d;
 }
 
+// Records every ROM mailbox the bridge reads or writes (changes only).
+void recordRom(NDS* nds)
+{
+    auto rec = [&](const char* key, u32 addr, u32 len) {
+        if (addr && len && len <= 4096) gRec.entry(key, ptr(nds, addr), len);
+    };
+    u32 blk = gBr.blkSize, party = gBr.partySize, pkt = gBr.pktSize;
+    if (blk > 512) blk = 0;
+    if (party > 2048) party = 0;
+    if (pkt > 2048) pkt = 0;
+    rec("ROM disc", gBr.disc, 32*4);
+    rec("ROM export", gBr.exportBlk, blk);
+    rec("ROM import", gBr.importBlk, blk);
+    rec("ROM owExport", gBr.owExp, 48);
+    rec("ROM partyExport", gBr.partyExp, party);
+    rec("ROM partyImport", gBr.partyImp, party);
+    rec("ROM pktExport", gBr.pktExp, pkt);
+    for (int r = 1; r <= 8; r++)
+    {
+        char k[32];
+        snprintf(k, sizeof(k), "ROM owImport role%d", r);  rec(k, gBr.owImp + (r-1)*48, 48);
+        snprintf(k, sizeof(k), "ROM pktImport role%d", r); rec(k, gBr.pktImp ? gBr.pktImp + (r-1)*pkt : 0, pkt);
+        snprintf(k, sizeof(k), "ROM blkN role%d", r);      rec(k, gBr.blkN ? gBr.blkN + (r-1)*blk : 0, blk);
+        snprintf(k, sizeof(k), "ROM partyN role%d", r);    rec(k, gBr.partyN ? gBr.partyN + (r-1)*party : 0, party);
+    }
+    // the ROM's diagnostics block and debug inbox (discovery slots 30 and 17)
+    if (gBr.disc)
+    {
+        rec("ROM diag", rd32(nds, gBr.disc + 30*4), 64);
+        rec("ROM inbox", rd32(nds, gBr.disc + 17*4), 32);
+    }
+}
+
 void hexDump(NDS* nds, u32 addr, u32 len, char* out, size_t cap)
 {
     size_t o = 0;
@@ -1215,8 +1342,15 @@ void Pump(NDS* nds)
     }
     if (!gBr.ctl)
         gBr.ctl = rd32(nds, gBr.disc + 31*4);   // [31] can be published after the signature
+    if (gBr.ctl && gRec.on())
+        gRec.entry("ROM ctl", ptr(nds, gBr.ctl), 16);
     if (!gBr.ctl || rd32(nds, gBr.ctl) != 0x42524731)     // "BRG1"
     {
+        if (gRec.on())
+        {
+            // the bridge block is down (battle, menu): keep watching the mailboxes
+            recordRom(nds);
+        }
         if ((gBr.frame % 30) == 0)
         {
             std::lock_guard<std::mutex> lk(gUiMx);
@@ -1229,6 +1363,7 @@ void Pump(NDS* nds)
     gBr.pktSize   = rd16(nds, gBr.ctl + 12);
 
     wr8(nds, gBr.ctl + 6, ++gBr.beat);     // fork heartbeat
+    if (gRec.on()) recordRom(nds);
 
     u8 wanted = rd8(nds, gBr.ctl + 4);
     gBr.lastWanted = wanted;
