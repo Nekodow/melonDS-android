@@ -26,6 +26,7 @@ struct Status
     std::string roster[9];          // display name by role 1..8 (slot 0 unused)
     int rosterPing[9] = {};
     int myRole = 0;
+    std::string debug;              // bridge counters, for troubleshooting
 };
 
 const int DefaultPort = 7833;

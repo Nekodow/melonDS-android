@@ -470,5 +470,6 @@
     <string name="pm_online_players">Joueurs :</string>
     <string name="pm_online_me">" (toi)"</string>
     <string name="pm_online_overlay_room">En ligne · salle %1$s · %2$d joueur(s)</string>
+    <string name="pm_online_diagnostics">Diagnostic :</string>
     <string name="pm_online_overlay_connecting">En ligne · %1$s</string>
 </resources>

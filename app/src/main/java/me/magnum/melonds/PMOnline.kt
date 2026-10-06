@@ -17,6 +17,8 @@ object PMOnline {
         val message: String,
         val myRole: Int,
         val players: List<Player>,
+        /** Bridge counters, for troubleshooting */
+        val debug: String,
     ) {
         val isActive get() = mode != 0 || pending
         val isHost get() = mode == 1
@@ -47,6 +49,7 @@ object PMOnline {
             message = raw[5],
             myRole = raw[6].toIntOrNull() ?: 0,
             players = players,
+            debug = raw.getOrElse(23) { "" },
         )
     }
 

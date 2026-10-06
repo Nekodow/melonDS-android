@@ -295,6 +295,8 @@ struct Net
     u32 lastNameF = 0, lastPingF = 0;
     u32 lobbySeen[9] = {0};
 
+    bool newSession = false;            // a session just started: reset per-session bridge state
+
     int myRole() const { return (mode == 1) ? 1 : (assignedRole ? assignedRole : 2); }
     bool anyUp() const { for (int i = 0; i < 7; i++) if (peers[i].up) return true; return false; }
     int upCount() const { int n = 0; for (int i = 0; i < 7; i++) if (peers[i].up) n++; return n; }
@@ -701,6 +703,7 @@ struct Net
             gUiReq.want = 0;
         }
         shutdown();
+        newSession = true;
         if (r.want == 1) startHostOnline(r.addr, r.disp, r.name);
         else if (r.want == 2) startJoinOnline(r.addr, r.disp, r.code, r.name);
         else
@@ -806,6 +809,20 @@ struct BridgeSt
     u8 lastPairRole = 0xFF;
     u8 lastOwnInBattle = 0;
 
+    // Game frames received while Pump was not running (pause, long stall):
+    // the newest one per (role, channel), applied when Pump resumes. Every
+    // channel is a snapshot, so the newest frame carries the full state, but
+    // party/pkt are only sent on change and must never be lost.
+    std::vector<u8> deferred[9][4];
+    int deferredPeer[9][4] = {};
+
+    // diagnostics, shown in the session dialog
+    u32 txBundles = 0, txParty = 0, txPkt = 0;
+    u32 rxBundles = 0, rxParty = 0, rxPkt = 0;
+    u32 rxRejectedLegacy = 0, rxBadSize = 0;
+    u8 lastWanted = 0;
+    bool lastStrict = false;
+
     u8 FreshPeerMask(int myRole) const
     {
         u8 m = 0;
@@ -818,6 +835,48 @@ struct BridgeSt
 
 BridgeSt gBr;
 
+// Roles are per session: forget who was seen in a previous one, or a player
+// seen under a second role would latch the 3+ player strict routing.
+void resetSessionState()
+{
+    for (int r = 0; r < 9; r++)
+    {
+        gBr.roleSeenAt[r] = 0;
+        gBr.gameEver[r] = 0;
+        for (int t = 0; t < 4; t++) gBr.deferred[r][t].clear();
+    }
+    gBr.lastParty.clear();
+    gBr.lastPkt.clear();
+    gBr.lastPairRole = 0xFF;
+    gBr.txBundles = gBr.txParty = gBr.txPkt = 0;
+    gBr.rxBundles = gBr.rxParty = gBr.rxPkt = 0;
+    gBr.rxRejectedLegacy = gBr.rxBadSize = 0;
+}
+
+void checkNewSession()
+{
+    if (!gNet.newSession) return;
+    gNet.newSession = false;
+    resetSessionState();
+}
+
+// Splits a game frame: false if it is not a valid peer bundle.
+bool parseGameFrame(const u8* rx, u32 n, int myRole, int& tag, int& r)
+{
+    if (n < 4) return false;
+    tag = rx[0]; r = rx[1];
+    u32 sz = (u32)(rx[2] | (rx[3] << 8));
+    if (r < 1 || r > 8 || r == myRole) return false;
+    if (tag < 1 || tag > 3) return false;
+    return n >= 4 + sz;
+}
+
+void hostForward(int pi, const u8* rx, u32 n)
+{
+    for (int pj = 0; pj < 7; pj++)
+        if (pj != pi) gNet.enqueue(pj, rx, n);
+}
+
 // Serializes Pump (emulation thread) against Shutdown and the keepalive.
 std::mutex gPumpMx;
 
@@ -826,17 +885,19 @@ std::atomic<bool> gKeepaliveStarted{false};
 
 // While the game is paused (pause menu, app in background) Pump stops running.
 // Keep the links alive meanwhile: answer the relay's pings, keep the lobby
-// roster fresh, and drain incoming bundles (dropped, except that a host keeps
-// relaying them between its clients) so receive buffers can't overflow.
+// roster fresh, relay bundles between a host's clients, and keep the newest
+// game frame per role and channel for Pump to apply on resume. Short stalls
+// (shader compiles on a battle transition) stay below the threshold.
 void keepaliveLoop()
 {
     for (;;)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        if (nowMs() - gLastPumpMs.load() < 500) continue;
+        if (nowMs() - gLastPumpMs.load() < 3000) continue;
 
         std::lock_guard<std::mutex> lk(gPumpMx);
         gNet.pollRequest();
+        checkNewSession();
         if (gNet.mode == 0) continue;
 
         gBr.frame += 15;    // keeps the lobby announce/ping cadence (~2/s)
@@ -849,9 +910,11 @@ void keepaliveLoop()
         while ((n = gNet.recvFrame(pi, rx, sizeof(rx))) > 0)
         {
             if (gNet.handleCtlFrame(pi, rx, n)) continue;
-            if (myRole == 1 && n >= 4 && rx[1] >= 1 && rx[1] <= 8 && rx[1] != myRole)
-                for (int pj = 0; pj < 7; pj++)
-                    if (pj != pi) gNet.enqueue(pj, rx, n);
+            int tag, r;
+            if (!parseGameFrame(rx, n, myRole, tag, r)) continue;
+            if (myRole == 1) hostForward(pi, rx, n);
+            gBr.deferred[r][tag].assign(rx, rx + n);
+            gBr.deferredPeer[r][tag] = pi;
         }
     }
 }
@@ -860,6 +923,81 @@ void ensureKeepalive()
 {
     if (!gKeepaliveStarted.exchange(true))
         std::thread(keepaliveLoop).detach();
+}
+
+// Applies one peer bundle to the ROM's import mailboxes.
+void applyGameFrame(NDS* nds, u8* rx, u32 n, int myRole)
+{
+    int tag = rx[0], r = rx[1];
+    u32 sz = (u32)(rx[2] | (rx[3] << 8));
+
+    // peer newly game-active: resend on-change channels
+    bool wasFresh = gBr.roleSeenAt[r] != 0 && gBr.frame - gBr.roleSeenAt[r] <= 180;
+    if (!wasFresh)
+    {
+        gBr.lastParty.clear();
+        gBr.lastPkt.clear();
+    }
+    gBr.roleSeenAt[r] = gBr.frame;
+    gBr.gameEver[r] = 1;
+
+    // Legacy-channel pair routing (3+ players): the single pairwise import
+    // block / party buffer only takes the chosen partner's data (ROM publishes
+    // intent at OW export +0x18). Per-role arrays always update.
+    u8 pairRole = rd8(nds, gBr.owExp + 0x18);
+    int gamePeers = 0;
+    for (int gr = 1; gr <= 8; gr++)
+        if (gr != myRole && gBr.gameEver[gr]) gamePeers++;
+    bool strict = (gamePeers >= 2);
+    bool legacyOpen = (pairRole == 0 && !strict) || r == (int)pairRole;
+    gBr.lastStrict = strict;
+
+    if (tag == 1 && sz == gBr.blkSize && n >= 4 + sz + 48)
+    {
+        gBr.rxBundles++;
+        rx[4 + 0x12] = (u8)r;   // stamp playerRole
+        if (legacyOpen)
+            memcpy(ptr(nds, gBr.importBlk), rx + 4, sz);
+        else
+            gBr.rxRejectedLegacy++;
+        if (gBr.blkN) memcpy(ptr(nds, gBr.blkN + (r-1)*sz), rx + 4, sz);
+        memcpy(ptr(nds, gBr.owImp + (r-1)*48), rx + 4 + sz, 48);
+    }
+    else if (tag == 2 && sz == gBr.partySize)
+    {
+        gBr.rxParty++;
+        if (legacyOpen)
+            memcpy(ptr(nds, gBr.partyImp), rx + 4, sz);
+        if (gBr.partyN) memcpy(ptr(nds, gBr.partyN + (r-1)*sz), rx + 4, sz);
+    }
+    else if (tag == 3 && sz == gBr.pktSize)
+    {
+        gBr.rxPkt++;
+        memcpy(ptr(nds, gBr.pktImp + (r-1)*sz), rx + 4, sz);
+    }
+    else
+    {
+        // block sizes differ from ours: the peer runs another ROM version
+        gBr.rxBadSize++;
+    }
+}
+
+void publishDebug(NDS* nds, int myRole)
+{
+    char d[256];
+    snprintf(d, sizeof(d),
+        "role %d, wanted %u, pair %u%s\n"
+        "sent: %u blk / %u party / %u pkt\n"
+        "recv: %u blk / %u party / %u pkt\n"
+        "legacy refused %u, size mismatch %u\n"
+        "sizes blk %u party %u pkt %u, peers 0x%02X",
+        myRole, gBr.lastWanted, gBr.owExp ? rd8(nds, gBr.owExp + 0x18) : 0, gBr.lastStrict ? " (strict)" : "",
+        gBr.txBundles, gBr.txParty, gBr.txPkt,
+        gBr.rxBundles, gBr.rxParty, gBr.rxPkt,
+        gBr.rxRejectedLegacy, gBr.rxBadSize,
+        gBr.blkSize, gBr.partySize, gBr.pktSize, gBr.FreshPeerMask(myRole));
+    std::lock_guard<std::mutex> lk(gUiMx);
+    gUiStatus.debug = d;
 }
 
 void postRequest(int want, const sockaddr_in* addr, const char* disp, const char* code, const char* name)
@@ -970,6 +1108,7 @@ void Pump(NDS* nds)
     gBr.frame++;
 
     gNet.pollRequest();
+    checkNewSession();
     if (gNet.mode == 0) return;
     gNet.tick(gBr.frame);
 
@@ -993,7 +1132,12 @@ void Pump(NDS* nds)
                 break;
             }
         }
-        if (!gBr.disc) return;
+        if (!gBr.disc)
+        {
+            std::lock_guard<std::mutex> lk(gUiMx);
+            gUiStatus.debug = "ROM bridge not found (not Project PM, or still booting)";
+            return;
+        }
 
         gBr.exportBlk = rd32(nds, gBr.disc + 2*4);
         gBr.importBlk = rd32(nds, gBr.disc + 3*4);
@@ -1009,7 +1153,15 @@ void Pump(NDS* nds)
         gBr.ctl       = rd32(nds, gBr.disc + 31*4);
         BR_LOG("ROM discovery block at %08X, bridge ctl %08X", gBr.disc, gBr.ctl);
     }
-    if (!gBr.ctl || rd32(nds, gBr.ctl) != 0x42524731) return;   // "BRG1"
+    if (!gBr.ctl || rd32(nds, gBr.ctl) != 0x42524731)     // "BRG1"
+    {
+        if ((gBr.frame % 30) == 0)
+        {
+            std::lock_guard<std::mutex> lk(gUiMx);
+            gUiStatus.debug = "ROM bridge block not active yet";
+        }
+        return;
+    }
 
     gBr.partySize = rd16(nds, gBr.ctl + 10);
     gBr.pktSize   = rd16(nds, gBr.ctl + 12);
@@ -1017,6 +1169,7 @@ void Pump(NDS* nds)
     wr8(nds, gBr.ctl + 6, ++gBr.beat);     // fork heartbeat
 
     u8 wanted = rd8(nds, gBr.ctl + 4);
+    gBr.lastWanted = wanted;
     bool inGame = (wanted && gBr.blkSize != 0 && gBr.blkSize <= 512
         && gBr.partySize != 0 && gBr.partySize <= 2048
         && gBr.pktSize != 0 && gBr.pktSize <= 2048);
@@ -1042,6 +1195,7 @@ void Pump(NDS* nds)
         memcpy(buf + 4, ptr(nds, gBr.exportBlk), gBr.blkSize);
         memcpy(buf + 4 + gBr.blkSize, ptr(nds, gBr.owExp), 48);
         gNet.sendAll(buf, 4 + gBr.blkSize + 48);
+        gBr.txBundles++;
 
         // party: on content change
         if (gBr.lastParty.size() != gBr.partySize
@@ -1052,6 +1206,7 @@ void Pump(NDS* nds)
             buf[2] = (u8)(gBr.partySize & 0xFF); buf[3] = (u8)(gBr.partySize >> 8);
             memcpy(buf + 4, gBr.lastParty.data(), gBr.partySize);
             gNet.sendAll(buf, 4 + gBr.partySize);
+            gBr.txParty++;
         }
 
         // pkt channel: on content change
@@ -1063,10 +1218,20 @@ void Pump(NDS* nds)
             buf[2] = (u8)(gBr.pktSize & 0xFF); buf[3] = (u8)(gBr.pktSize >> 8);
             memcpy(buf + 4, gBr.lastPkt.data(), gBr.pktSize);
             gNet.sendAll(buf, 4 + gBr.pktSize);
+            gBr.txPkt++;
         }
     }
 
-    // receive: apply peers' mailboxes (per peer link; host relays)
+    // receive: apply what arrived while Pump was not running, then the
+    // peers' live mailboxes (per peer link; host relays)
+    for (int r = 1; r <= 8; r++)
+        for (int t = 1; t <= 3; t++)
+        {
+            std::vector<u8>& f = gBr.deferred[r][t];
+            if (f.empty()) continue;
+            applyGameFrame(nds, f.data(), (u32)f.size(), myRole);
+            f.clear();
+        }
     {
         u8 rx[2100];
         u32 n;
@@ -1074,62 +1239,13 @@ void Pump(NDS* nds)
         while ((n = gNet.recvFrame(pi, rx, sizeof(rx))) > 0)
         {
             if (gNet.handleCtlFrame(pi, rx, n)) continue;
-            if (n < 4) continue;
-            int tag = rx[0], r = rx[1];
-            u32 sz = (u32)(rx[2] | (rx[3] << 8));
-            if (r < 1 || r > 8 || r == myRole) continue;
-            if (n < 4 + sz) continue;
+            int tag, r;
+            if (!parseGameFrame(rx, n, myRole, tag, r)) continue;
 
             // host relay: forward a client bundle to the other clients
-            if (myRole == 1)
-                for (int pj = 0; pj < 7; pj++)
-                    if (pj != pi) gNet.enqueue(pj, rx, n);
+            if (myRole == 1) hostForward(pi, rx, n);
 
-            if (tag >= 1 && tag <= 3)
-            {
-                // peer newly game-active: resend on-change channels
-                bool wasFresh = gBr.roleSeenAt[r] != 0 && gBr.frame - gBr.roleSeenAt[r] <= 180;
-                if (!wasFresh)
-                {
-                    gBr.lastParty.clear();
-                    gBr.lastPkt.clear();
-                }
-                gBr.roleSeenAt[r] = gBr.frame;
-                gBr.gameEver[r] = 1;
-            }
-
-            // Legacy-channel pair routing (3+ players): the single pairwise
-            // import block / party buffer only takes the chosen partner's data
-            // (ROM publishes intent at OW export +0x18). Per-role arrays always
-            // update.
-            if (tag == 1 && sz == gBr.blkSize && n >= 4 + sz + 48)
-            {
-                u8 pairRole = rd8(nds, gBr.owExp + 0x18);
-                int gamePeers = 0;
-                for (int gr = 1; gr <= 8; gr++)
-                    if (gr != myRole && gBr.gameEver[gr]) gamePeers++;
-                bool strict = (gamePeers >= 2);
-                rx[4 + 0x12] = (u8)r;   // stamp playerRole
-                if ((pairRole == 0 && !strict) || r == (int)pairRole)
-                    memcpy(ptr(nds, gBr.importBlk), rx + 4, sz);
-                if (gBr.blkN) memcpy(ptr(nds, gBr.blkN + (r-1)*sz), rx + 4, sz);
-                memcpy(ptr(nds, gBr.owImp + (r-1)*48), rx + 4 + sz, 48);
-            }
-            else if (tag == 2 && sz == gBr.partySize)
-            {
-                u8 pairRole = rd8(nds, gBr.owExp + 0x18);
-                int gamePeers = 0;
-                for (int gr = 1; gr <= 8; gr++)
-                    if (gr != myRole && gBr.gameEver[gr]) gamePeers++;
-                bool strict = (gamePeers >= 2);
-                if ((pairRole == 0 && !strict) || r == (int)pairRole)
-                    memcpy(ptr(nds, gBr.partyImp), rx + 4, sz);
-                if (gBr.partyN) memcpy(ptr(nds, gBr.partyN + (r-1)*sz), rx + 4, sz);
-            }
-            else if (tag == 3 && sz == gBr.pktSize)
-            {
-                memcpy(ptr(nds, gBr.pktImp + (r-1)*sz), rx + 4, sz);
-            }
+            applyGameFrame(nds, rx, n, myRole);
         }
     }
 
@@ -1166,6 +1282,9 @@ void Pump(NDS* nds)
         wr8(nds, gBr.ctl + 9, mask);
         wr8(nds, gBr.ctl + 7, mask ? 2 : 1);
     }
+
+    if ((gBr.frame % 30) == 0)
+        publishDebug(nds, myRole);
 }
 
 }

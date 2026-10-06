@@ -61,14 +61,14 @@ Java_me_magnum_melonds_PMOnline_getDefaultRelayInternal(JNIEnv* env, jobject thi
 }
 
 // Flat layout parsed by PMOnline.getStatus():
-// [mode, peers, pending, code, server, text, myRole, name1, ping1, ..., name8, ping8]
+// [mode, peers, pending, code, server, text, myRole, name1, ping1, ..., name8, ping8, debug]
 JNIEXPORT jobjectArray JNICALL
 Java_me_magnum_melonds_PMOnline_getStatusInternal(JNIEnv* env, jobject thiz)
 {
     PMBridge::Status st = PMBridge::GetStatus();
 
     jclass stringClass = env->FindClass("java/lang/String");
-    jobjectArray result = env->NewObjectArray(7 + 8 * 2, stringClass, nullptr);
+    jobjectArray result = env->NewObjectArray(7 + 8 * 2 + 1, stringClass, nullptr);
 
     int i = 0;
     auto put = [&](const std::string& value) {
@@ -89,6 +89,7 @@ Java_me_magnum_melonds_PMOnline_getStatusInternal(JNIEnv* env, jobject thiz)
         put(st.roster[r]);
         put(std::to_string(st.rosterPing[r]));
     }
+    put(st.debug);
     return result;
 }
 

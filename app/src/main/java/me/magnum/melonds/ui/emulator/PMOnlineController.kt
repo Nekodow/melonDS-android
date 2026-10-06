@@ -161,6 +161,11 @@ class PMOnlineController(
                 lines += "  P${it.role} ${it.name}$me$ping"
             }
         }
+        if (status.debug.isNotEmpty()) {
+            lines += ""
+            lines += activity.getString(R.string.pm_online_diagnostics)
+            lines += status.debug
+        }
         return lines.joinToString("\n")
     }
 

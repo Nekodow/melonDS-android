@@ -676,5 +676,6 @@
     <string name="pm_online_players">Players:</string>
     <string name="pm_online_me">" (you)"</string>
     <string name="pm_online_overlay_room">Online · room %1$s · %2$d player(s)</string>
+    <string name="pm_online_diagnostics">Diagnostics:</string>
     <string name="pm_online_overlay_connecting">Online · %1$s</string>
 </resources>
